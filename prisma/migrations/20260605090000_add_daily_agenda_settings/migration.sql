@@ -1,0 +1,5 @@
+ALTER TABLE "User"
+ADD COLUMN "telegramChatId" TEXT,
+ADD COLUMN "dailyAgendaEnabled" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN "dailyAgendaHour" INTEGER NOT NULL DEFAULT 8,
+ADD COLUMN "lastDailyAgendaSentAt" TIMESTAMP(3);

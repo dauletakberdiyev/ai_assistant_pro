@@ -1,0 +1,309 @@
+import { Bot, InlineKeyboard } from "grammy";
+import type { Context } from "grammy";
+import type { PrismaClient } from "@prisma/client";
+import type { Env } from "../config/env.js";
+import { buildDailyAgenda } from "../calendar/agenda.js";
+import {
+  cancelCalendarCancellationDraft,
+  confirmCalendarCancellationDraft,
+  formatCancellationForTelegram
+} from "../calendar/cancellations.js";
+import {
+  cancelCalendarEventDraft,
+  confirmCalendarEventDraft,
+  formatDraftForTelegram
+} from "../calendar/drafts.js";
+import {
+  cancelCalendarUpdateDraft,
+  confirmCalendarUpdateDraft,
+  formatUpdateForTelegram
+} from "../calendar/updates.js";
+import { runAssistant } from "../assistant/assistant.js";
+import { assertAllowedTelegramUser } from "./auth.js";
+import { getOrCreateAllowedUser } from "../users.js";
+
+function authFromContext(ctx: Context, env: Env): string {
+  return assertAllowedTelegramUser(ctx.from?.id, env.TELEGRAM_ALLOWED_USER_ID);
+}
+
+function draftKeyboard(draftId: string) {
+  return new InlineKeyboard()
+    .text("Confirm", `draft:confirm:${draftId}`)
+    .text("Cancel", `draft:cancel:${draftId}`);
+}
+
+function cancellationKeyboard(draftId: string) {
+  return new InlineKeyboard()
+    .text("Confirm delete", `del:confirm:${draftId}`)
+    .text("Keep event", `del:cancel:${draftId}`);
+}
+
+function updateKeyboard(draftId: string) {
+  return new InlineKeyboard()
+    .text("Confirm update", `upd:confirm:${draftId}`)
+    .text("Cancel", `upd:cancel:${draftId}`);
+}
+
+async function replyToBotError(ctx: Context, env: Env, error: unknown) {
+  const message = error instanceof Error ? error.message : "Assistant error";
+  if (message.includes("not allowed")) {
+    await ctx.reply("Sorry, this private assistant is not available for this Telegram account.");
+    return;
+  }
+
+  if (message.includes("Google Calendar is not connected")) {
+    await ctx.reply(
+      `Google Calendar is not connected yet. Open:\n${env.PUBLIC_BASE_URL}/auth/google/start`
+    );
+    return;
+  }
+
+  await ctx.reply(`I hit an error: ${message}`);
+}
+
+function parseAgendaHour(text: string | undefined): number | undefined {
+  const rawHour = text?.trim().split(/\s+/)[1];
+  if (!rawHour) return undefined;
+  const hour = Number(rawHour);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+    throw new Error("Use /agenda_on with an hour from 0 to 23, for example /agenda_on 8.");
+  }
+  return hour;
+}
+
+export function createBot(db: PrismaClient, env: Env) {
+  const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
+
+  bot.command("start", async (ctx) => {
+    try {
+      const telegramUserId = authFromContext(ctx, env);
+      await getOrCreateAllowedUser(db, telegramUserId, env.DEFAULT_TIMEZONE, String(ctx.chat.id));
+      await ctx.reply(
+        [
+          "Assistant is online.",
+          "Connect Google Calendar here:",
+          `${env.PUBLIC_BASE_URL}/auth/google/start`
+        ].join("\n")
+      );
+    } catch {
+      await ctx.reply("Sorry, this private assistant is not available for this Telegram account.");
+    }
+  });
+
+  bot.command("connect_google", async (ctx) => {
+    try {
+      const telegramUserId = authFromContext(ctx, env);
+      await getOrCreateAllowedUser(db, telegramUserId, env.DEFAULT_TIMEZONE, String(ctx.chat.id));
+      await ctx.reply(`Connect Google Calendar here:\n${env.PUBLIC_BASE_URL}/auth/google/start`);
+    } catch {
+      await ctx.reply("Sorry, this private assistant is not available for this Telegram account.");
+    }
+  });
+
+  const agendaCommand = async (ctx: Context) => {
+    try {
+      const telegramUserId = authFromContext(ctx, env);
+      const user = await getOrCreateAllowedUser(
+        db,
+        telegramUserId,
+        env.DEFAULT_TIMEZONE,
+        ctx.chat ? String(ctx.chat.id) : undefined
+      );
+      const agenda = await buildDailyAgenda(db, env, user.id);
+      await ctx.reply(agenda.text);
+    } catch (error) {
+      await replyToBotError(ctx, env, error);
+    }
+  };
+
+  bot.command("today", agendaCommand);
+  bot.command("agenda", agendaCommand);
+
+  bot.command("agenda_on", async (ctx) => {
+    try {
+      const telegramUserId = authFromContext(ctx, env);
+      const hour = parseAgendaHour(ctx.message?.text);
+      const user = await getOrCreateAllowedUser(
+        db,
+        telegramUserId,
+        env.DEFAULT_TIMEZONE,
+        String(ctx.chat.id)
+      );
+      const updatedUser = await db.user.update({
+        where: { id: user.id },
+        data: {
+          dailyAgendaEnabled: true,
+          dailyAgendaHour: hour ?? user.dailyAgendaHour,
+          telegramChatId: String(ctx.chat.id)
+        }
+      });
+      await ctx.reply(
+        `Daily agenda check-ins are on at ${String(updatedUser.dailyAgendaHour).padStart(
+          2,
+          "0"
+        )}:00 ${updatedUser.timezone}.`
+      );
+    } catch (error) {
+      await replyToBotError(ctx, env, error);
+    }
+  });
+
+  bot.command("agenda_off", async (ctx) => {
+    try {
+      const telegramUserId = authFromContext(ctx, env);
+      const user = await getOrCreateAllowedUser(
+        db,
+        telegramUserId,
+        env.DEFAULT_TIMEZONE,
+        String(ctx.chat.id)
+      );
+      await db.user.update({
+        where: { id: user.id },
+        data: { dailyAgendaEnabled: false, telegramChatId: String(ctx.chat.id) }
+      });
+      await ctx.reply("Daily agenda check-ins are off.");
+    } catch (error) {
+      await replyToBotError(ctx, env, error);
+    }
+  });
+
+  bot.on("callback_query:data", async (ctx) => {
+    try {
+      const telegramUserId = authFromContext(ctx, env);
+      const user = await getOrCreateAllowedUser(
+        db,
+        telegramUserId,
+        env.DEFAULT_TIMEZONE,
+        ctx.chat ? String(ctx.chat.id) : undefined
+      );
+      const [kind, action, draftId] = ctx.callbackQuery.data.split(":");
+
+      if (
+        !["draft", "del", "upd"].includes(kind ?? "") ||
+        !draftId ||
+        !["confirm", "cancel"].includes(action ?? "")
+      ) {
+        await ctx.answerCallbackQuery({ text: "Unknown action" });
+        return;
+      }
+
+      if (kind === "draft") {
+        if (action === "confirm") {
+          const { event } = await confirmCalendarEventDraft(db, env, user.id, draftId);
+          await ctx.answerCallbackQuery({ text: "Calendar event created" });
+          await ctx.editMessageText(
+            `Created: ${event.summary ?? "calendar event"}\nEvent ID: ${event.id ?? "unknown"}`
+          );
+          return;
+        }
+
+        await cancelCalendarEventDraft(db, user.id, draftId);
+        await ctx.answerCallbackQuery({ text: "Draft canceled" });
+        await ctx.editMessageText("Canceled calendar event draft.");
+        return;
+      }
+
+      if (kind === "upd") {
+        if (action === "confirm") {
+          const { event } = await confirmCalendarUpdateDraft(db, env, user.id, draftId);
+          await ctx.answerCallbackQuery({ text: "Calendar event updated" });
+          await ctx.editMessageText(
+            `Updated: ${event.summary ?? "calendar event"}\nEvent ID: ${event.id ?? "unknown"}`
+          );
+          return;
+        }
+
+        await cancelCalendarUpdateDraft(db, user.id, draftId);
+        await ctx.answerCallbackQuery({ text: "Update canceled" });
+        await ctx.editMessageText("Canceled calendar update draft.");
+        return;
+      }
+
+      if (action === "confirm") {
+        await confirmCalendarCancellationDraft(db, env, user.id, draftId);
+        await ctx.answerCallbackQuery({ text: "Calendar event deleted" });
+        await ctx.editMessageText("Deleted calendar event.");
+        return;
+      }
+
+      await cancelCalendarCancellationDraft(db, user.id, draftId);
+      await ctx.answerCallbackQuery({ text: "Event kept" });
+      await ctx.editMessageText("Kept calendar event.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not process action";
+      await ctx.answerCallbackQuery({ text: message, show_alert: true });
+    }
+  });
+
+  bot.on("message:text", async (ctx) => {
+    try {
+      const telegramUserId = authFromContext(ctx, env);
+      const user = await getOrCreateAllowedUser(
+        db,
+        telegramUserId,
+        env.DEFAULT_TIMEZONE,
+        String(ctx.chat.id)
+      );
+      const chatId = String(ctx.chat.id);
+      const text = ctx.message.text;
+
+      await db.message.create({
+        data: {
+          userId: user.id,
+          telegramChatId: chatId,
+          role: "user",
+          content: text,
+          raw: ctx.message as object
+        }
+      });
+
+      const result = await runAssistant(db, env, user.id, text);
+
+      await db.message.create({
+        data: {
+          userId: user.id,
+          telegramChatId: chatId,
+          role: "assistant",
+          content: result.text
+        }
+      });
+
+      await ctx.reply(result.text);
+
+      for (const draft of result.pendingDrafts) {
+        await ctx.reply(formatDraftForTelegram(draft), {
+          reply_markup: draftKeyboard(draft.id)
+        });
+      }
+
+      for (const draft of result.pendingCancellationDrafts) {
+        await ctx.reply(formatCancellationForTelegram(draft), {
+          reply_markup: cancellationKeyboard(draft.id)
+        });
+      }
+
+      for (const draft of result.pendingUpdateDrafts) {
+        await ctx.reply(formatUpdateForTelegram(draft), {
+          reply_markup: updateKeyboard(draft.id)
+        });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Assistant error";
+      if (message.includes("not allowed")) {
+        await ctx.reply("Sorry, this private assistant is not available for this Telegram account.");
+        return;
+      }
+
+      if (message.includes("Google Calendar is not connected")) {
+        await ctx.reply(
+          `Google Calendar is not connected yet. Open:\n${env.PUBLIC_BASE_URL}/auth/google/start`
+        );
+        return;
+      }
+
+      await ctx.reply(`I hit an error: ${message}`);
+    }
+  });
+
+  return bot;
+}
