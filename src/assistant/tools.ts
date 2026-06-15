@@ -15,14 +15,23 @@ import {
 import { createCalendarUpdateDraft } from "../calendar/updates.js";
 import { getFreeBusy, listCalendarEvents } from "../google/calendar.js";
 import {
+  deleteUserPreference,
+  formatPreferencesForAssistant,
+  listUserPreferences,
+  saveUserPreference
+} from "../memory/preferences.js";
+import {
   confirmCalendarEventSchema,
+  deleteUserPreferenceSchema,
   draftCancelCalendarEventSchema,
   draftCalendarEventSchema,
   draftUpdateCalendarEventSchema,
   getDailyAgendaSchema,
   getFreeBusySchema,
+  listUserPreferencesSchema,
   listCalendarEventsSchema,
   suggestTimeSlotsSchema,
+  updateUserPreferenceSchema,
   type AssistantToolName
 } from "./toolSchemas.js";
 
@@ -268,6 +277,39 @@ async function runTool(
         requires_telegram_confirmation: true,
         error: "The user must press the Telegram Confirm button before the event is created."
       };
+    }
+
+    case "list_user_preferences": {
+      listUserPreferencesSchema.parse(rawArguments);
+      const preferences = await listUserPreferences(context.db, context.userId);
+      return {
+        ok: true,
+        preferences: preferences.map((preference) => ({
+          key: preference.key,
+          value: preference.value,
+          updated_at: preference.updatedAt.toISOString()
+        })),
+        summary: formatPreferencesForAssistant(preferences)
+      };
+    }
+
+    case "update_user_preference": {
+      const input = updateUserPreferenceSchema.parse(rawArguments);
+      const preference = await saveUserPreference(context.db, context.userId, input);
+      return {
+        ok: true,
+        preference: {
+          key: preference.key,
+          value: preference.value,
+          updated_at: preference.updatedAt.toISOString()
+        }
+      };
+    }
+
+    case "delete_user_preference": {
+      const input = deleteUserPreferenceSchema.parse(rawArguments);
+      const result = await deleteUserPreference(context.db, context.userId, input.key);
+      return { ok: true, key: input.key, deleted: result.deleted };
     }
   }
 }

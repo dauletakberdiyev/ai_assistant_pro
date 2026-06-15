@@ -18,6 +18,15 @@ import {
   confirmCalendarUpdateDraft,
   formatUpdateForTelegram
 } from "../calendar/updates.js";
+import {
+  deleteAllUserPreferences,
+  deleteUserPreference,
+  formatPreferencesForTelegram,
+  listUserPreferences,
+  PREFERENCE_KEYS,
+  PREFERENCE_LABELS,
+  type PreferenceKey
+} from "../memory/preferences.js";
 import { runAssistant } from "../assistant/assistant.js";
 import { assertAllowedTelegramUser } from "./auth.js";
 import { getOrCreateAllowedUser } from "../users.js";
@@ -69,6 +78,19 @@ function parseAgendaHour(text: string | undefined): number | undefined {
     throw new Error("Use /agenda_on with an hour from 0 to 23, for example /agenda_on 8.");
   }
   return hour;
+}
+
+function preferenceHelpText() {
+  const keys = PREFERENCE_KEYS.map((key) => `- ${key}: ${PREFERENCE_LABELS[key]}`).join("\n");
+  return [`Use /forget <key> or /forget all.`, "Available keys:", keys].join("\n");
+}
+
+function parseForgetTarget(text: string | undefined): PreferenceKey | "all" {
+  const rawTarget = text?.trim().split(/\s+/)[1];
+  if (!rawTarget) throw new Error(preferenceHelpText());
+  if (rawTarget === "all") return "all";
+  if (PREFERENCE_KEYS.includes(rawTarget as PreferenceKey)) return rawTarget as PreferenceKey;
+  throw new Error(preferenceHelpText());
 }
 
 export function createBot(db: PrismaClient, env: Env) {
@@ -163,6 +185,55 @@ export function createBot(db: PrismaClient, env: Env) {
       });
       await ctx.reply("Daily agenda check-ins are off.");
     } catch (error) {
+      await replyToBotError(ctx, env, error);
+    }
+  });
+
+  bot.command("memory", async (ctx) => {
+    try {
+      const telegramUserId = authFromContext(ctx, env);
+      const user = await getOrCreateAllowedUser(
+        db,
+        telegramUserId,
+        env.DEFAULT_TIMEZONE,
+        ctx.chat ? String(ctx.chat.id) : undefined
+      );
+      const preferences = await listUserPreferences(db, user.id);
+      await ctx.reply(formatPreferencesForTelegram(preferences));
+    } catch (error) {
+      await replyToBotError(ctx, env, error);
+    }
+  });
+
+  bot.command("forget", async (ctx) => {
+    try {
+      const telegramUserId = authFromContext(ctx, env);
+      const user = await getOrCreateAllowedUser(
+        db,
+        telegramUserId,
+        env.DEFAULT_TIMEZONE,
+        ctx.chat ? String(ctx.chat.id) : undefined
+      );
+      const target = parseForgetTarget(ctx.message?.text);
+
+      if (target === "all") {
+        const result = await deleteAllUserPreferences(db, user.id);
+        await ctx.reply(`Forgot ${result.count} saved preference${result.count === 1 ? "" : "s"}.`);
+        return;
+      }
+
+      const result = await deleteUserPreference(db, user.id, target);
+      await ctx.reply(
+        result.deleted
+          ? `Forgot ${target}.`
+          : `I did not have a saved preference for ${target}.`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.startsWith("Use /forget")) {
+        await ctx.reply(message);
+        return;
+      }
       await replyToBotError(ctx, env, error);
     }
   });

@@ -64,13 +64,13 @@ Goal: move from simple calendar operations to scheduling assistance.
 
 ## Phase 4: Memory and Personal Context
 
-Status: deferred
+Status: done
 
 Goal: remember stable user preferences and context safely.
 
-- Add lightweight user preferences, such as working hours, default meeting duration, and preferred calendar behavior.
-- Add vector memory only after the assistant has enough useful recurring context.
-- Keep memory transparent: the user should be able to inspect and delete stored preferences.
+- Add lightweight user preferences, such as working hours, default meeting duration, and preferred calendar behavior. Done.
+- Add vector memory only after the assistant has enough useful recurring context. Deferred.
+- Keep memory transparent: the user should be able to inspect and delete stored preferences. Done with `/memory` and `/forget`.
 
 ## Phase 5: Notion and Knowledge Work
 
@@ -97,6 +97,6 @@ Goal: move from single-user MVP to a product-shaped system.
 
 ## Immediate Next Step
 
-Implement Phase 3: better calendar intelligence.
+Implement Phase 5: Notion and knowledge work.
 
-This is the natural next step because the assistant now supports safe create, update, delete, daily agenda summaries, free-block detection, conflict summaries, and opt-in daily check-ins.
+This is the natural next step because the assistant now supports safe create, update, delete, daily agenda summaries, free-block detection, conflict summaries, opt-in daily check-ins, scheduling intelligence, recurring events, and transparent calendar preferences.

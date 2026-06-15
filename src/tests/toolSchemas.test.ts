@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  deleteUserPreferenceSchema,
   draftUpdateCalendarEventSchema,
   draftCalendarEventSchema,
   getDailyAgendaSchema,
   getFreeBusySchema,
   listCalendarEventsSchema,
-  suggestTimeSlotsSchema
+  suggestTimeSlotsSchema,
+  updateUserPreferenceSchema
 } from "../assistant/toolSchemas.js";
 
 describe("calendar tool schemas", () => {
@@ -88,6 +90,24 @@ describe("calendar tool schemas", () => {
         event_id: "google_event_1",
         current_title: "Gym",
         timezone: "Asia/Almaty"
+      })
+    ).toThrow();
+  });
+
+  it("validates preference tool inputs", () => {
+    const input = updateUserPreferenceSchema.parse({
+      key: "default_meeting_duration_minutes",
+      value: "45"
+    });
+
+    expect(input.key).toBe("default_meeting_duration_minutes");
+    expect(deleteUserPreferenceSchema.parse({ key: "working_hours_start" }).key).toBe(
+      "working_hours_start"
+    );
+    expect(() =>
+      updateUserPreferenceSchema.parse({
+        key: "favorite_snack",
+        value: "raisins"
       })
     ).toThrow();
   });

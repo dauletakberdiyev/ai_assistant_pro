@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PREFERENCE_KEYS } from "../memory/preferences.js";
 
 const isoDateTime = z.string().datetime({ offset: true });
 const recurrenceRule = z
@@ -6,6 +7,7 @@ const recurrenceRule = z
   .trim()
   .max(500)
   .regex(/^RRULE:/i, "Use an RFC 5545 RRULE string starting with RRULE:");
+const preferenceKey = z.enum(PREFERENCE_KEYS);
 
 export const listCalendarEventsSchema = z.object({
   time_min: isoDateTime,
@@ -45,6 +47,17 @@ export const draftCalendarEventSchema = z.object({
 
 export const confirmCalendarEventSchema = z.object({
   draft_id: z.string().min(1)
+});
+
+export const listUserPreferencesSchema = z.object({});
+
+export const updateUserPreferenceSchema = z.object({
+  key: preferenceKey,
+  value: z.string().min(1).max(1000)
+});
+
+export const deleteUserPreferenceSchema = z.object({
+  key: preferenceKey
 });
 
 export const draftCancelCalendarEventSchema = z.object({
@@ -246,6 +259,58 @@ export const assistantTools = [
       },
       required: ["draft_id"]
     }
+  },
+  {
+    type: "function",
+    name: "list_user_preferences",
+    description:
+      "List saved user preferences that may affect calendar planning, scheduling, and assistant behavior.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+      required: []
+    }
+  },
+  {
+    type: "function",
+    name: "update_user_preference",
+    description:
+      "Save or replace an explicit stable user preference. Use only when the user asks you to remember, save, prefer, default, usually, or set a working-hours/calendar preference.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        key: {
+          type: "string",
+          enum: PREFERENCE_KEYS,
+          description:
+            "Preference key. working_hours_start/end use HH:MM local time. default_meeting_duration_minutes is an integer minute count. preferred_calendar_behavior is short free text."
+        },
+        value: {
+          type: "string",
+          description: "The preference value. Keep it concise and stable."
+        }
+      },
+      required: ["key", "value"]
+    }
+  },
+  {
+    type: "function",
+    name: "delete_user_preference",
+    description:
+      "Delete one saved user preference when the user asks to forget or remove it.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        key: {
+          type: "string",
+          enum: PREFERENCE_KEYS
+        }
+      },
+      required: ["key"]
+    }
   }
 ] as const;
 
@@ -257,4 +322,7 @@ export type AssistantToolName =
   | "draft_calendar_event"
   | "draft_cancel_calendar_event"
   | "draft_update_calendar_event"
-  | "confirm_calendar_event";
+  | "confirm_calendar_event"
+  | "list_user_preferences"
+  | "update_user_preference"
+  | "delete_user_preference";

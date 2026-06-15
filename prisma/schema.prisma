@@ -22,9 +22,24 @@ model User {
   messages           Message[]
   assistantRuns      AssistantRun[]
   toolCalls          ToolCall[]
+  preferences        UserPreference[]
   eventDrafts        CalendarEventDraft[]
   cancellationDrafts CalendarEventCancellationDraft[]
   updateDrafts       CalendarEventUpdateDraft[]
+}
+
+model UserPreference {
+  id        String   @id @default(cuid())
+  userId    String
+  key       String
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@index([userId])
 }
 
 model OAuthAccount {

@@ -9,6 +9,7 @@ import type { Env } from "../config/env.js";
 import { assistantTools, type AssistantToolName } from "./toolSchemas.js";
 import { executeAssistantTool } from "./tools.js";
 import { createOpenAIResponse } from "./openaiResponses.js";
+import { formatPreferencesForAssistant } from "../memory/preferences.js";
 
 const MAX_TOOL_ROUNDS = 5;
 
@@ -38,12 +39,16 @@ function currentLocalIso(timezone: string): string {
   return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}:${values.second}${offset}`;
 }
 
-function buildInstructions(timezone: string): string {
+function buildInstructions(timezone: string, preferenceSummary: string): string {
   const nowUtc = new Date().toISOString();
   const nowLocal = currentLocalIso(timezone);
   return [
     "You are a concise personal AI assistant reachable from Telegram.",
     "You help the user understand their calendar, find available time, and draft calendar changes.",
+    "Use saved preferences when they are relevant, but do not invent preferences that are not saved.",
+    "Only save a preference when the user explicitly asks you to remember, save, prefer, default, usually, or set a stable calendar preference.",
+    "If the user asks what you remember, use list_user_preferences.",
+    "If the user asks you to forget a saved preference, use delete_user_preference.",
     "Use calendar tools when the answer depends on the user's real calendar.",
     "Use get_daily_agenda when the user asks for today, agenda, daily plan, free blocks, or schedule conflicts for a day.",
     "Use suggest_time_slots when the user asks when they can fit a task or meeting, or provides a duration without a specific start time.",
@@ -63,6 +68,7 @@ function buildInstructions(timezone: string): string {
     "For recurring events, use RFC 5545 RRULE strings such as RRULE:FREQ=WEEKLY;COUNT=10. Do not guess an end condition if the user did not provide one; ask whether it should repeat forever, until a date, or for a number of occurrences.",
     "When creating date-times, use ISO 8601 strings with timezone offsets.",
     `User timezone: ${timezone}. Current local time in that timezone: ${nowLocal}. Current UTC time: ${nowUtc}.`,
+    `Saved user preferences:\n${preferenceSummary}`,
     "Use the current local time, not UTC, when interpreting words like now, today, tomorrow, this morning, and tonight.",
     "If the user names a timezone, use that timezone for interpretation and include its offset in tool date-times."
   ].join("\n");
@@ -140,6 +146,11 @@ export async function runAssistant(
   userText: string
 ): Promise<AssistantResult> {
   const user = await db.user.findUniqueOrThrow({ where: { id: userId } });
+  const preferences = await db.userPreference.findMany({
+    where: { userId },
+    orderBy: { key: "asc" }
+  });
+  const preferenceSummary = formatPreferencesForAssistant(preferences);
   const run = await db.assistantRun.create({
     data: { userId, status: "running", input: userText }
   });
@@ -161,7 +172,7 @@ export async function runAssistant(
     for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
       const response: any = await createOpenAIResponse(env.OPENAI_API_KEY, {
         model: env.OPENAI_MODEL,
-        instructions: buildInstructions(user.timezone),
+        instructions: buildInstructions(user.timezone, preferenceSummary),
         input,
         tools: assistantTools as any
       });

@@ -10,6 +10,7 @@ A single-user MVP assistant that talks through Telegram, uses OpenAI tool callin
 - Calendar tools for listing events, free/busy lookup, and event drafting.
 - Daily agenda summaries through `/today` and `/agenda`.
 - Opt-in daily agenda check-ins through `/agenda_on` and `/agenda_off`.
+- Transparent saved calendar preferences through `/memory` and `/forget`.
 - Event creation only after pressing the Telegram `Confirm` inline button.
 - Event update/reschedule only after pressing the Telegram `Confirm update` inline button.
 - Event deletion only after pressing the Telegram `Confirm delete` inline button.
@@ -128,11 +129,28 @@ npm run db:studio
 /agenda
 /agenda_on 8
 /agenda_off
+/memory
+/forget working_hours_start
 ```
 
 `/agenda_on` enables one conservative daily agenda check-in at the selected local hour.
 The agenda includes today's events, free work blocks, conflicts, and the next upcoming event.
+`/memory` lists saved calendar preferences. `/forget <key>` removes one preference, and `/forget all`
+clears saved preferences.
 
 ## Safety Model
 
 The assistant can read calendar data, summarize agendas, create event drafts, create update drafts, and create deletion drafts. It cannot directly create, update, or delete Google Calendar events from a model tool call. Actual insertion, patching, or deletion happens only when the allowed Telegram user presses the relevant inline confirmation button.
+
+## Memory Model
+
+The assistant can save a small set of explicit calendar preferences:
+
+- `working_hours_start`
+- `working_hours_end`
+- `default_meeting_duration_minutes`
+- `preferred_calendar_behavior`
+
+Saved preferences are shown with `/memory` and can be deleted with `/forget <key>` or `/forget all`.
+The assistant should only save preferences when the user explicitly asks it to remember, save, prefer,
+default, usually, or set a stable calendar preference.
