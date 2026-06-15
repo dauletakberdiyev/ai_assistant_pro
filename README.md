@@ -11,6 +11,7 @@ A single-user MVP assistant that talks through Telegram, uses OpenAI tool callin
 - Daily agenda summaries through `/today` and `/agenda`.
 - Opt-in daily agenda check-ins through `/agenda_on` and `/agenda_off`.
 - Transparent saved calendar preferences through `/memory` and `/forget`.
+- Opt-in salah time notifications through `/salah_on`, `/salah_off`, and `/salah_status`.
 - Event creation only after pressing the Telegram `Confirm` inline button.
 - Event update/reschedule only after pressing the Telegram `Confirm update` inline button.
 - Event deletion only after pressing the Telegram `Confirm delete` inline button.
@@ -131,12 +132,17 @@ npm run db:studio
 /agenda_off
 /memory
 /forget working_hours_start
+/salah_on Астана
+/salah_off
+/salah_status
 ```
 
 `/agenda_on` enables one conservative daily agenda check-in at the selected local hour.
 The agenda includes today's events, free work blocks, conflicts, and the next upcoming event.
 `/memory` lists saved calendar preferences. `/forget <key>` removes one preference, and `/forget all`
 clears saved preferences.
+`/salah_on <city>` enables salah time notifications for one Kazakh/Cyrillic Muftyat city. If several
+cities match, the bot asks you to choose the correct region/district. `/salah_off` disables notifications.
 
 ## Safety Model
 
@@ -154,3 +160,13 @@ The assistant can save a small set of explicit calendar preferences:
 Saved preferences are shown with `/memory` and can be deleted with `/forget <key>` or `/forget all`.
 The assistant should only save preferences when the user explicitly asks it to remember, save, prefer,
 default, usually, or set a stable calendar preference.
+
+## Salah Notifications
+
+Salah notifications use Muftyat APIs. The app searches cities on demand and stores only the selected
+city for the user, not the whole Muftyat city catalog. Prayer times are fetched yearly by selected
+latitude/longitude and cached in memory.
+
+Notifications are sent when `Fajr`, `Dhuhr`, `Asr`, `Maghrib`, and `Isha` begin. The bot also sends
+a 30-minute ending reminder for Fajr before Sunrise, Dhuhr before Asr, Asr before Maghrib, and
+Maghrib before Isha.

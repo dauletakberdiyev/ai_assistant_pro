@@ -21,13 +21,22 @@ import {
   saveUserPreference
 } from "../memory/preferences.js";
 import {
+  disableSalahNotifications,
+  formatCityLabel,
+  formatSalahStatus,
+  resolveSalahCitySearch
+} from "../salah/notifications.js";
+import {
+  configureSalahNotificationsSchema,
   confirmCalendarEventSchema,
+  disableSalahNotificationsSchema,
   deleteUserPreferenceSchema,
   draftCancelCalendarEventSchema,
   draftCalendarEventSchema,
   draftUpdateCalendarEventSchema,
   getDailyAgendaSchema,
   getFreeBusySchema,
+  getSalahNotificationStatusSchema,
   listUserPreferencesSchema,
   listCalendarEventsSchema,
   suggestTimeSlotsSchema,
@@ -310,6 +319,77 @@ async function runTool(
       const input = deleteUserPreferenceSchema.parse(rawArguments);
       const result = await deleteUserPreference(context.db, context.userId, input.key);
       return { ok: true, key: input.key, deleted: result.deleted };
+    }
+
+    case "configure_salah_notifications": {
+      const input = configureSalahNotificationsSchema.parse(rawArguments);
+      const result = await resolveSalahCitySearch(context.db, context.userId, input.city_name);
+      if (result.status === "not_found") {
+        return {
+          ok: false,
+          not_found: true,
+          error: "City was not found. Ask the user to type the city name correctly in Kazakh/Cyrillic."
+        };
+      }
+
+      if (result.status === "multiple") {
+        return {
+          ok: false,
+          requires_clarification: true,
+          error: "Multiple matching cities were found. Ask the user to choose one with region/district.",
+          matches: result.cities.slice(0, 10).map((city) => ({
+            city_id: city.id,
+            label: formatCityLabel(city),
+            title: city.title,
+            region: city.region,
+            district: city.district
+          }))
+        };
+      }
+
+      return {
+        ok: true,
+        enabled: true,
+        city: {
+          city_id: result.setting.cityId,
+          title: result.setting.cityTitle,
+          region: result.setting.region,
+          district: result.setting.district,
+          latitude: result.setting.latitude,
+          longitude: result.setting.longitude,
+          timezone_offset: result.setting.timezoneOffset
+        }
+      };
+    }
+
+    case "disable_salah_notifications": {
+      disableSalahNotificationsSchema.parse(rawArguments);
+      const result = await disableSalahNotifications(context.db, context.userId);
+      return { ok: true, disabled: result.disabled };
+    }
+
+    case "get_salah_notification_status": {
+      getSalahNotificationStatusSchema.parse(rawArguments);
+      const setting = await context.db.salahNotificationSetting.findUnique({
+        where: { userId: context.userId }
+      });
+      return {
+        ok: true,
+        configured: Boolean(setting),
+        enabled: Boolean(setting?.enabled),
+        status: formatSalahStatus(setting),
+        city: setting
+          ? {
+              city_id: setting.cityId,
+              title: setting.cityTitle,
+              region: setting.region,
+              district: setting.district,
+              latitude: setting.latitude,
+              longitude: setting.longitude,
+              timezone_offset: setting.timezoneOffset
+            }
+          : null
+      };
     }
   }
 }

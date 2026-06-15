@@ -60,6 +60,14 @@ export const deleteUserPreferenceSchema = z.object({
   key: preferenceKey
 });
 
+export const configureSalahNotificationsSchema = z.object({
+  city_name: z.string().min(1).max(200)
+});
+
+export const disableSalahNotificationsSchema = z.object({});
+
+export const getSalahNotificationStatusSchema = z.object({});
+
 export const draftCancelCalendarEventSchema = z.object({
   event_id: z.string().min(1),
   title: z.string().min(1).max(200),
@@ -311,6 +319,45 @@ export const assistantTools = [
       },
       required: ["key"]
     }
+  },
+  {
+    type: "function",
+    name: "configure_salah_notifications",
+    description:
+      "Enable or change salah time notifications for a Kazakh/Cyrillic city name using the Muftyat cities API. Use this when the user asks for prayer/salah/namaz notifications.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        city_name: {
+          type: "string",
+          description: "City name in Kazakh/Cyrillic, e.g. Астана or Алматы."
+        }
+      },
+      required: ["city_name"]
+    }
+  },
+  {
+    type: "function",
+    name: "disable_salah_notifications",
+    description: "Disable salah time notifications for the user.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+      required: []
+    }
+  },
+  {
+    type: "function",
+    name: "get_salah_notification_status",
+    description: "Show whether salah time notifications are configured and which city is selected.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+      required: []
+    }
   }
 ] as const;
 
@@ -325,4 +372,7 @@ export type AssistantToolName =
   | "confirm_calendar_event"
   | "list_user_preferences"
   | "update_user_preference"
-  | "delete_user_preference";
+  | "delete_user_preference"
+  | "configure_salah_notifications"
+  | "disable_salah_notifications"
+  | "get_salah_notification_status";

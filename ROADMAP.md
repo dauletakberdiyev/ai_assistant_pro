@@ -13,6 +13,7 @@ Status: done
 - Safe event creation through assistant-created drafts and Telegram confirmation buttons.
 - Safe event update/reschedule through assistant-created update drafts and Telegram confirmation buttons.
 - Safe event deletion through assistant-created cancellation drafts and Telegram confirmation buttons.
+- Opt-in salah time notifications through Muftyat city and prayer-time APIs.
 - PostgreSQL persistence through Prisma.
 - Unit tests for auth, crypto, tool schemas, and calendar draft safety.
 
@@ -72,7 +73,19 @@ Goal: remember stable user preferences and context safely.
 - Add vector memory only after the assistant has enough useful recurring context. Deferred.
 - Keep memory transparent: the user should be able to inspect and delete stored preferences. Done with `/memory` and `/forget`.
 
-## Phase 5: Notion and Knowledge Work
+## Phase 5: Salah Time Notifier
+
+Status: done
+
+Goal: send opt-in salah reminders based on the user's selected city.
+
+- Search Muftyat cities by user-provided Kazakh/Cyrillic city name. Done.
+- Store only the user's selected city, not the full city catalog. Done.
+- Send notifications when each salah time enters. Done.
+- Send reminders 30 minutes before Fajr, Dhuhr, Asr, and Maghrib windows end. Done.
+- Let the user change or disable the selected city. Done with `/salah_on`, `/salah_off`, `/salah_status`, and assistant tools.
+
+## Phase 6: Notion and Knowledge Work
 
 Status: deferred
 
@@ -83,7 +96,7 @@ Goal: connect calendar actions to notes, tasks, and planning workflows.
 - Find relevant notes before meetings.
 - Draft follow-up tasks from calendar events.
 
-## Phase 6: Multi-User Productization
+## Phase 7: Multi-User Productization
 
 Status: deferred
 
@@ -97,6 +110,6 @@ Goal: move from single-user MVP to a product-shaped system.
 
 ## Immediate Next Step
 
-Implement Phase 5: Notion and knowledge work.
+Implement Phase 6: Notion and knowledge work.
 
-This is the natural next step because the assistant now supports safe create, update, delete, daily agenda summaries, free-block detection, conflict summaries, opt-in daily check-ins, scheduling intelligence, recurring events, and transparent calendar preferences.
+This is the natural next step because the assistant now supports safe create, update, delete, daily agenda summaries, free-block detection, conflict summaries, opt-in daily check-ins, scheduling intelligence, recurring events, transparent calendar preferences, and salah time notifications.

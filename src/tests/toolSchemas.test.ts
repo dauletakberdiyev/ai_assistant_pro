@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  configureSalahNotificationsSchema,
   deleteUserPreferenceSchema,
+  disableSalahNotificationsSchema,
   draftUpdateCalendarEventSchema,
   draftCalendarEventSchema,
+  getSalahNotificationStatusSchema,
   getDailyAgendaSchema,
   getFreeBusySchema,
   listCalendarEventsSchema,
@@ -110,5 +113,14 @@ describe("calendar tool schemas", () => {
         value: "raisins"
       })
     ).toThrow();
+  });
+
+  it("validates salah notification tool inputs", () => {
+    const input = configureSalahNotificationsSchema.parse({ city_name: "Астана" });
+
+    expect(input.city_name).toBe("Астана");
+    expect(disableSalahNotificationsSchema.parse({})).toEqual({});
+    expect(getSalahNotificationStatusSchema.parse({})).toEqual({});
+    expect(() => configureSalahNotificationsSchema.parse({ city_name: "" })).toThrow();
   });
 });

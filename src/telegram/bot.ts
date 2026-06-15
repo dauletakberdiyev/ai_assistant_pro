@@ -1,6 +1,6 @@
 import { Bot, InlineKeyboard } from "grammy";
 import type { Context } from "grammy";
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient, SalahCityChoice } from "@prisma/client";
 import type { Env } from "../config/env.js";
 import { buildDailyAgenda } from "../calendar/agenda.js";
 import {
@@ -27,6 +27,15 @@ import {
   PREFERENCE_LABELS,
   type PreferenceKey
 } from "../memory/preferences.js";
+import { searchMuftyatCities } from "../salah/muftyat.js";
+import {
+  choiceToCity,
+  configureSalahNotifications,
+  createSalahCityChoices,
+  disableSalahNotifications,
+  formatCityChoiceText,
+  formatSalahStatus
+} from "../salah/notifications.js";
 import { runAssistant } from "../assistant/assistant.js";
 import { assertAllowedTelegramUser } from "./auth.js";
 import { getOrCreateAllowedUser } from "../users.js";
@@ -51,6 +60,14 @@ function updateKeyboard(draftId: string) {
   return new InlineKeyboard()
     .text("Confirm update", `upd:confirm:${draftId}`)
     .text("Cancel", `upd:cancel:${draftId}`);
+}
+
+function salahCityKeyboard(choices: SalahCityChoice[]) {
+  const keyboard = new InlineKeyboard();
+  choices.forEach((choice, index) => {
+    keyboard.text(String(index + 1), `salah:city:${choice.id}`).row();
+  });
+  return keyboard;
 }
 
 async function replyToBotError(ctx: Context, env: Env, error: unknown) {
@@ -91,6 +108,14 @@ function parseForgetTarget(text: string | undefined): PreferenceKey | "all" {
   if (rawTarget === "all") return "all";
   if (PREFERENCE_KEYS.includes(rawTarget as PreferenceKey)) return rawTarget as PreferenceKey;
   throw new Error(preferenceHelpText());
+}
+
+function parseSalahCityName(text: string | undefined): string {
+  const cityName = text?.trim().split(/\s+/).slice(1).join(" ").trim();
+  if (!cityName) {
+    throw new Error("Use /salah_on with a Kazakh/Cyrillic city name, for example /salah_on Астана.");
+  }
+  return cityName;
 }
 
 export function createBot(db: PrismaClient, env: Env) {
@@ -238,6 +263,82 @@ export function createBot(db: PrismaClient, env: Env) {
     }
   });
 
+  bot.command("salah_on", async (ctx) => {
+    try {
+      const telegramUserId = authFromContext(ctx, env);
+      const user = await getOrCreateAllowedUser(
+        db,
+        telegramUserId,
+        env.DEFAULT_TIMEZONE,
+        String(ctx.chat.id)
+      );
+      const cityName = parseSalahCityName(ctx.message?.text);
+      const cities = await searchMuftyatCities(cityName);
+
+      if (cities.length === 0) {
+        await ctx.reply("City was not found. Please type the city name correctly in Kazakh/Cyrillic.");
+        return;
+      }
+
+      if (cities.length === 1) {
+        const setting = await configureSalahNotifications(
+          db,
+          user.id,
+          cities[0]!,
+          String(ctx.chat.id)
+        );
+        await ctx.reply(formatSalahStatus(setting));
+        return;
+      }
+
+      const choices = await createSalahCityChoices(db, user.id, cities);
+      await ctx.reply(formatCityChoiceText(cities.slice(0, choices.length)), {
+        reply_markup: salahCityKeyboard(choices)
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.startsWith("Use /salah_on")) {
+        await ctx.reply(message);
+        return;
+      }
+      await replyToBotError(ctx, env, error);
+    }
+  });
+
+  bot.command("salah_off", async (ctx) => {
+    try {
+      const telegramUserId = authFromContext(ctx, env);
+      const user = await getOrCreateAllowedUser(
+        db,
+        telegramUserId,
+        env.DEFAULT_TIMEZONE,
+        ctx.chat ? String(ctx.chat.id) : undefined
+      );
+      const result = await disableSalahNotifications(db, user.id);
+      await ctx.reply(result.disabled ? "Salah notifications are off." : "Salah notifications were not configured.");
+    } catch (error) {
+      await replyToBotError(ctx, env, error);
+    }
+  });
+
+  bot.command("salah_status", async (ctx) => {
+    try {
+      const telegramUserId = authFromContext(ctx, env);
+      const user = await getOrCreateAllowedUser(
+        db,
+        telegramUserId,
+        env.DEFAULT_TIMEZONE,
+        ctx.chat ? String(ctx.chat.id) : undefined
+      );
+      const setting = await db.salahNotificationSetting.findUnique({
+        where: { userId: user.id }
+      });
+      await ctx.reply(formatSalahStatus(setting));
+    } catch (error) {
+      await replyToBotError(ctx, env, error);
+    }
+  });
+
   bot.on("callback_query:data", async (ctx) => {
     try {
       const telegramUserId = authFromContext(ctx, env);
@@ -248,6 +349,36 @@ export function createBot(db: PrismaClient, env: Env) {
         ctx.chat ? String(ctx.chat.id) : undefined
       );
       const [kind, action, draftId] = ctx.callbackQuery.data.split(":");
+
+      if (kind === "salah") {
+        if (action !== "city" || !draftId) {
+          await ctx.answerCallbackQuery({ text: "Unknown salah action" });
+          return;
+        }
+
+        const choice = await db.salahCityChoice.findFirst({
+          where: {
+            id: draftId,
+            userId: user.id,
+            expiresAt: { gt: new Date() }
+          }
+        });
+        if (!choice) {
+          await ctx.answerCallbackQuery({ text: "City choice expired", show_alert: true });
+          return;
+        }
+
+        const setting = await configureSalahNotifications(
+          db,
+          user.id,
+          choiceToCity(choice),
+          ctx.chat ? String(ctx.chat.id) : undefined
+        );
+        await db.salahCityChoice.deleteMany({ where: { userId: user.id } });
+        await ctx.answerCallbackQuery({ text: "Salah notifications enabled" });
+        await ctx.editMessageText(formatSalahStatus(setting));
+        return;
+      }
 
       if (
         !["draft", "del", "upd"].includes(kind ?? "") ||
