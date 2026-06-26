@@ -22,6 +22,6 @@ process.on("SIGINT", () => void shutdown("SIGINT"));
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
 await bot.init();
-dailyAgendaTimer = startDailyAgendaScheduler(prisma, env, bot);
-salahNotificationTimer = startSalahNotificationScheduler(prisma, bot);
+dailyAgendaTimer = startDailyAgendaScheduler(prisma, env, bot, server.log);
+salahNotificationTimer = startSalahNotificationScheduler(prisma, bot, server.log);
 await server.listen({ port: env.PORT, host: "0.0.0.0" });

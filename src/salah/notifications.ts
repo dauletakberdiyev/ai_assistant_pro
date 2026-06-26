@@ -1,5 +1,6 @@
 import type { PrismaClient, SalahCityChoice, SalahNotificationSetting } from "@prisma/client";
 import type { Bot } from "grammy";
+import { consoleStructuredLogger, errorContext, type StructuredLogger } from "../logger.js";
 import { fetchMuftyatSalahTimes, searchMuftyatCities, type MuftyatCity, type MuftyatDayTimes, type SalahPrayerName } from "./muftyat.js";
 
 const CHECK_INTERVAL_MS = 60_000;
@@ -278,7 +279,8 @@ async function markAndSendNotification(
   bot: Bot,
   setting: SalahNotificationSetting & { user: { telegramChatId: string | null } },
   notification: SalahNotificationDue,
-  now: Date
+  now: Date,
+  logger: StructuredLogger
 ) {
   try {
     await db.salahNotificationDelivery.create({
@@ -291,14 +293,39 @@ async function markAndSendNotification(
       }
     });
   } catch {
+    logger.debug?.(
+      {
+        scheduler: "salah_notifications",
+        settingId: setting.id,
+        userId: setting.userId,
+        prayerName: notification.prayerName,
+        kind: notification.kind
+      },
+      "salah notification already delivered"
+    );
     return;
   }
 
   if (!setting.user.telegramChatId) return;
   await bot.api.sendMessage(setting.user.telegramChatId, notification.message);
+  logger.info(
+    {
+      scheduler: "salah_notifications",
+      settingId: setting.id,
+      userId: setting.userId,
+      telegramChatId: setting.user.telegramChatId,
+      prayerName: notification.prayerName,
+      kind: notification.kind
+    },
+    "salah notification delivered"
+  );
 }
 
-export function startSalahNotificationScheduler(db: PrismaClient, bot: Bot) {
+export function startSalahNotificationScheduler(
+  db: PrismaClient,
+  bot: Bot,
+  logger: StructuredLogger = consoleStructuredLogger
+) {
   const tick = async () => {
     try {
       const now = new Date();
@@ -319,13 +346,17 @@ export function startSalahNotificationScheduler(db: PrismaClient, bot: Bot) {
         });
 
         for (const notification of due) {
-          await markAndSendNotification(db, bot, setting, notification, now);
+          await markAndSendNotification(db, bot, setting, notification, now, logger);
         }
       }
     } catch (error) {
-      console.error("salah notification scheduler failed", {
-        error: error instanceof Error ? error.message : error
-      });
+      logger.error(
+        {
+          scheduler: "salah_notifications",
+          ...errorContext(error)
+        },
+        "salah notification scheduler failed"
+      );
     }
   };
 

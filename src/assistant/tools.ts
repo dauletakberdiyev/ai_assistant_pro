@@ -5,19 +5,22 @@ import type {
   PrismaClient
 } from "@prisma/client";
 import type { Env } from "../config/env.js";
+import { consoleStructuredLogger, errorContext, type StructuredLogger } from "../logger.js";
 import { buildDailyAgenda, deriveBusyBlocksFromEvents } from "../calendar/agenda.js";
 import { createCalendarCancellationDraft } from "../calendar/cancellations.js";
 import { createCalendarEventDraft } from "../calendar/drafts.js";
+import { suggestAvailableTimeSlots } from "../calendar/intelligence.js";
 import {
-  findCalendarConflicts,
-  suggestAvailableTimeSlots
-} from "../calendar/intelligence.js";
+  findRecurringCalendarConflicts,
+  getOccurrenceWindow
+} from "../calendar/recurrence.js";
 import { createCalendarUpdateDraft } from "../calendar/updates.js";
 import { getFreeBusy, listCalendarEvents } from "../google/calendar.js";
 import {
   deleteUserPreference,
   formatPreferencesForAssistant,
   listUserPreferences,
+  resolveCalendarPreferences,
   saveUserPreference
 } from "../memory/preferences.js";
 import {
@@ -52,6 +55,7 @@ export type ToolExecutionContext = {
   pendingDrafts: CalendarEventDraft[];
   pendingCancellationDrafts: CalendarEventCancellationDraft[];
   pendingUpdateDrafts: CalendarEventUpdateDraft[];
+  logger?: StructuredLogger;
 };
 
 function isInsufficientPermissionError(error: unknown): boolean {
@@ -94,9 +98,19 @@ export async function executeAssistantTool(
   context: ToolExecutionContext
 ) {
   const startedArguments = rawArguments ?? {};
+  const logger = context.logger ?? consoleStructuredLogger;
 
   try {
     const result = await runTool(toolName, startedArguments, context);
+    logger.info(
+      {
+        userId: context.userId,
+        assistantRunId: context.assistantRunId,
+        toolName,
+        ok: (result as { ok?: unknown }).ok
+      },
+      "assistant tool call completed"
+    );
     await context.db.toolCall.create({
       data: {
         userId: context.userId,
@@ -109,6 +123,15 @@ export async function executeAssistantTool(
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown tool error";
+    logger.error(
+      {
+        userId: context.userId,
+        assistantRunId: context.assistantRunId,
+        toolName,
+        ...errorContext(error)
+      },
+      "assistant tool call failed"
+    );
     await context.db.toolCall.create({
       data: {
         userId: context.userId,
@@ -157,6 +180,16 @@ async function runTool(
 
     case "suggest_time_slots": {
       const input = suggestTimeSlotsSchema.parse(rawArguments);
+      const calendarPreferences = await resolveCalendarPreferences(context.db, context.userId);
+      const durationMinutes =
+        input.duration_minutes ?? calendarPreferences.defaultMeetingDurationMinutes;
+      if (!durationMinutes) {
+        return {
+          ok: false,
+          requires_clarification: true,
+          error: "Please provide a duration for the task or meeting."
+        };
+      }
       const { busy, estimated } = await getBusyBlocksForScheduling(context, {
         timeMin: input.time_min,
         timeMax: input.time_max,
@@ -166,13 +199,13 @@ async function runTool(
         busyBlocks: busy,
         timeMin: new Date(input.time_min),
         timeMax: new Date(input.time_max),
-        durationMinutes: input.duration_minutes,
+        durationMinutes,
         maxSlots: input.max_slots
       });
       return {
         ok: true,
         timezone: input.timezone,
-        duration_minutes: input.duration_minutes,
+        duration_minutes: durationMinutes,
         free_busy_estimated: estimated,
         slots
       };
@@ -182,18 +215,33 @@ async function runTool(
       const input = draftCalendarEventSchema.parse(rawArguments);
       const startTime = new Date(input.start_time);
       const endTime = new Date(input.end_time);
+      const occurrenceWindow = getOccurrenceWindow({
+        startTime,
+        endTime,
+        recurrenceRule: input.recurrence_rule
+      });
       const { busy, estimated } = await getBusyBlocksForScheduling(context, {
-        timeMin: input.start_time,
-        timeMax: input.end_time,
+        timeMin: occurrenceWindow.timeMin.toISOString(),
+        timeMax: occurrenceWindow.timeMax.toISOString(),
         timezone: input.timezone
       });
-      const conflicts = findCalendarConflicts(busy, startTime, endTime);
+      const { conflicts, expansion } = findRecurringCalendarConflicts({
+        busyBlocks: busy,
+        startTime,
+        endTime,
+        recurrenceRule: input.recurrence_rule
+      });
       if (conflicts.length > 0) {
         return {
           ok: false,
           requires_clarification: true,
-          error: "The requested time overlaps existing calendar busy blocks.",
+          error: "One or more requested calendar event times overlap existing busy blocks.",
           free_busy_estimated: estimated,
+          recurrence_check: {
+            occurrence_count: expansion.occurrences.length,
+            checked_until: expansion.checkedUntil.toISOString(),
+            bounded: expansion.bounded
+          },
           conflicts
         };
       }
@@ -218,6 +266,13 @@ async function runTool(
           end_time: draft.endTime.toISOString(),
           timezone: draft.timezone,
           recurrence_rule: draft.recurrenceRule,
+          recurrence_check: input.recurrence_rule
+            ? {
+                occurrence_count: expansion.occurrences.length,
+                checked_until: expansion.checkedUntil.toISOString(),
+                bounded: expansion.bounded
+              }
+            : undefined,
           free_busy_estimated: estimated
         }
       };
@@ -249,12 +304,54 @@ async function runTool(
 
     case "draft_update_calendar_event": {
       const input = draftUpdateCalendarEventSchema.parse(rawArguments);
+      const newStartTime = input.new_start_time ? new Date(input.new_start_time) : undefined;
+      const newEndTime = input.new_end_time ? new Date(input.new_end_time) : undefined;
+      const scheduleStartTime = newStartTime ?? (input.current_start_time ? new Date(input.current_start_time) : undefined);
+      const scheduleEndTime = newEndTime ?? (input.current_end_time ? new Date(input.current_end_time) : undefined);
+      const changesSchedule = Boolean(newStartTime && newEndTime) || Boolean(input.new_recurrence_rule);
+
+      if (changesSchedule && scheduleStartTime && scheduleEndTime) {
+        const occurrenceWindow = getOccurrenceWindow({
+          startTime: scheduleStartTime,
+          endTime: scheduleEndTime,
+          recurrenceRule: input.new_recurrence_rule
+        });
+        const events = await listCalendarEvents(context.db, context.env, context.userId, {
+          timeMin: occurrenceWindow.timeMin.toISOString(),
+          timeMax: occurrenceWindow.timeMax.toISOString(),
+          maxResults: 50
+        });
+        const busy = deriveBusyBlocksFromEvents(
+          events.filter((event) => event.id !== input.event_id),
+          input.timezone
+        );
+        const { conflicts, expansion } = findRecurringCalendarConflicts({
+          busyBlocks: busy,
+          startTime: scheduleStartTime,
+          endTime: scheduleEndTime,
+          recurrenceRule: input.new_recurrence_rule
+        });
+        if (conflicts.length > 0) {
+          return {
+            ok: false,
+            requires_clarification: true,
+            error: "One or more updated calendar event times overlap existing calendar events.",
+            recurrence_check: {
+              occurrence_count: expansion.occurrences.length,
+              checked_until: expansion.checkedUntil.toISOString(),
+              bounded: expansion.bounded
+            },
+            conflicts
+          };
+        }
+      }
+
       const draft = await createCalendarUpdateDraft(context.db, context.userId, {
         googleEventId: input.event_id,
         currentTitle: input.current_title,
         newTitle: input.new_title,
-        newStartTime: input.new_start_time ? new Date(input.new_start_time) : undefined,
-        newEndTime: input.new_end_time ? new Date(input.new_end_time) : undefined,
+        newStartTime,
+        newEndTime,
         timezone: input.timezone,
         newDescription: input.new_description,
         newLocation: input.new_location,

@@ -11,6 +11,7 @@ export type CalendarEventInput = {
   description?: string;
   location?: string;
   recurrenceRule?: string;
+  assistantDraftId?: string;
 };
 
 export type CalendarEventUpdateInput = {
@@ -91,7 +92,14 @@ export async function insertCalendarEvent(
         dateTime: input.endTime.toISOString(),
         timeZone: input.timezone
       },
-      recurrence: input.recurrenceRule ? [input.recurrenceRule] : undefined
+      recurrence: input.recurrenceRule ? [input.recurrenceRule] : undefined,
+      extendedProperties: input.assistantDraftId
+        ? {
+            private: {
+              assistantDraftId: input.assistantDraftId
+            }
+          }
+        : undefined
     }
   });
 

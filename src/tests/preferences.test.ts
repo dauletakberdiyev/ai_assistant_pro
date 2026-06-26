@@ -4,6 +4,7 @@ import {
   deleteUserPreference,
   formatPreferencesForAssistant,
   normalizePreferenceValue,
+  resolveCalendarPreferencesFromList,
   saveUserPreference
 } from "../memory/preferences.js";
 
@@ -67,5 +68,31 @@ describe("user preferences", () => {
     ] as any);
 
     expect(text).toContain("Default meeting duration: 45");
+  });
+
+  it("resolves effective calendar preferences with safe fallbacks", () => {
+    expect(
+      resolveCalendarPreferencesFromList([
+        { key: "working_hours_start", value: "10:00" },
+        { key: "working_hours_end", value: "16:30" },
+        { key: "default_meeting_duration_minutes", value: "45" }
+      ] as any)
+    ).toEqual({
+      workingHoursStart: "10:00",
+      workingHoursEnd: "16:30",
+      defaultMeetingDurationMinutes: 45
+    });
+
+    expect(
+      resolveCalendarPreferencesFromList([
+        { key: "working_hours_start", value: "18:00" },
+        { key: "working_hours_end", value: "09:00" },
+        { key: "default_meeting_duration_minutes", value: "not-a-number" }
+      ] as any)
+    ).toEqual({
+      workingHoursStart: "09:00",
+      workingHoursEnd: "18:00",
+      defaultMeetingDurationMinutes: undefined
+    });
   });
 });

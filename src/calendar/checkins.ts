@@ -1,6 +1,7 @@
 import type { PrismaClient, User } from "@prisma/client";
 import type { Bot } from "grammy";
 import type { Env } from "../config/env.js";
+import { consoleStructuredLogger, errorContext, type StructuredLogger } from "../logger.js";
 import { buildDailyAgenda, localDayKey, localHourMinute } from "./agenda.js";
 
 const CHECK_INTERVAL_MS = 60_000;
@@ -18,7 +19,12 @@ export function shouldSendDailyAgenda(user: User, now: Date): boolean {
   return localDayKey(user.lastDailyAgendaSentAt, user.timezone) !== localDayKey(now, user.timezone);
 }
 
-export function startDailyAgendaScheduler(db: PrismaClient, env: Env, bot: Bot) {
+export function startDailyAgendaScheduler(
+  db: PrismaClient,
+  env: Env,
+  bot: Bot,
+  logger: StructuredLogger = consoleStructuredLogger
+) {
   const tick = async () => {
     try {
       const now = new Date();
@@ -34,15 +40,27 @@ export function startDailyAgendaScheduler(db: PrismaClient, env: Env, bot: Bot) 
 
         const agenda = await buildDailyAgenda(db, env, user.id, { now });
         await bot.api.sendMessage(user.telegramChatId!, agenda.text);
+        logger.info(
+          {
+            scheduler: "daily_agenda",
+            userId: user.id,
+            telegramChatId: user.telegramChatId
+          },
+          "daily agenda delivered"
+        );
         await db.user.update({
           where: { id: user.id },
           data: { lastDailyAgendaSentAt: now }
         });
       }
     } catch (error) {
-      console.error("daily agenda check-in failed", {
-        error: error instanceof Error ? error.message : error
-      });
+      logger.error(
+        {
+          scheduler: "daily_agenda",
+          ...errorContext(error)
+        },
+        "daily agenda check-in failed"
+      );
     }
   };
 

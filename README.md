@@ -22,7 +22,7 @@ Notion, vector memory, recurring sync, and multi-user onboarding are intentional
 
 ## Requirements
 
-- Node.js `>=18.18`
+- Node.js `>=18.18` (Node 24 LTS recommended; `nvm use` reads `.nvmrc`)
 - npm
 - Docker
 - A Telegram bot token from BotFather

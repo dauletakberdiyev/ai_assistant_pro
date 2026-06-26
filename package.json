@@ -25,6 +25,7 @@
     "googleapis": "144.0.0",
     "grammy": "1.33.0",
     "openai": "^6.38.0",
+    "rrule": "^2.8.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {

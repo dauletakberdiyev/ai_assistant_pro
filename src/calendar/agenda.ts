@@ -1,6 +1,12 @@
 import type { PrismaClient } from "@prisma/client";
 import type { Env } from "../config/env.js";
 import { getFreeBusy, listCalendarEvents } from "../google/calendar.js";
+import {
+  DEFAULT_WORKING_HOURS_END,
+  DEFAULT_WORKING_HOURS_START,
+  resolveCalendarPreferences,
+  type EffectiveCalendarPreferences
+} from "../memory/preferences.js";
 
 type CalendarDateValue = {
   date?: string | null;
@@ -39,6 +45,8 @@ type TimedBlock = {
   end: Date;
   title?: string;
 };
+
+type WorkingHours = Pick<EffectiveCalendarPreferences, "workingHoursStart" | "workingHoursEnd">;
 
 export type DailyAgenda = {
   date: string;
@@ -209,6 +217,17 @@ function formatDuration(start: Date, end: Date): string {
   return `${minutes}m`;
 }
 
+function parseTimeOfDay(value: string): { hour: number; minute: number } {
+  const match = value.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  if (!match) {
+    return {
+      hour: Number(DEFAULT_WORKING_HOURS_START.slice(0, 2)),
+      minute: Number(DEFAULT_WORKING_HOURS_START.slice(3, 5))
+    };
+  }
+  return { hour: Number(match[1]), minute: Number(match[2]) };
+}
+
 function mergeBlocks(blocks: TimedBlock[]): TimedBlock[] {
   const sorted = [...blocks].sort((a, b) => a.start.getTime() - b.start.getTime());
   const merged: TimedBlock[] = [];
@@ -232,11 +251,20 @@ function clampBlock(block: TimedBlock, start: Date, end: Date): TimedBlock | und
   return { ...block, start: clampedStart, end: clampedEnd };
 }
 
-function getWorkdayBounds(date: string, timezone: string) {
+function getWorkdayBounds(
+  date: string,
+  timezone: string,
+  workingHours: WorkingHours = {
+    workingHoursStart: DEFAULT_WORKING_HOURS_START,
+    workingHoursEnd: DEFAULT_WORKING_HOURS_END
+  }
+) {
   const localDate = parseLocalDate(date);
+  const start = parseTimeOfDay(workingHours.workingHoursStart);
+  const end = parseTimeOfDay(workingHours.workingHoursEnd);
   return {
-    start: zonedTimeToUtc({ ...localDate, hour: 9, minute: 0, second: 0 }, timezone),
-    end: zonedTimeToUtc({ ...localDate, hour: 18, minute: 0, second: 0 }, timezone)
+    start: zonedTimeToUtc({ ...localDate, hour: start.hour, minute: start.minute, second: 0 }, timezone),
+    end: zonedTimeToUtc({ ...localDate, hour: end.hour, minute: end.minute, second: 0 }, timezone)
   };
 }
 
@@ -244,9 +272,10 @@ function getFreeBlocks(
   busyBlocks: AgendaBusyBlock[],
   date: string,
   timezone: string,
-  now: Date
+  now: Date,
+  workingHours?: WorkingHours
 ): TimedBlock[] {
-  const workday = getWorkdayBounds(date, timezone);
+  const workday = getWorkdayBounds(date, timezone, workingHours);
   const floor = localDayKey(now, timezone) === date && now > workday.start ? now : workday.start;
   if (floor >= workday.end) return [];
 
@@ -346,12 +375,17 @@ export function summarizeDailyAgenda(input: {
   events: AgendaEventInput[];
   busy: AgendaBusyBlock[];
   freeBusyEstimated?: boolean;
+  workingHours?: WorkingHours;
   now?: Date;
 }): DailyAgenda {
   const now = input.now ?? new Date();
   const timedEvents = getTimedEvents(input.events, input.timezone);
   const upcoming = timedEvents.find((event) => event.end > now);
-  const freeBlocks = getFreeBlocks(input.busy, input.date, input.timezone, now);
+  const workingHours = input.workingHours ?? {
+    workingHoursStart: DEFAULT_WORKING_HOURS_START,
+    workingHoursEnd: DEFAULT_WORKING_HOURS_END
+  };
+  const freeBlocks = getFreeBlocks(input.busy, input.date, input.timezone, now, workingHours);
   const conflictLines = getConflictLines(timedEvents, input.timezone);
 
   const lines = [`Agenda for ${formatDateLabel(input.date, input.timezone)} (${input.timezone})`];
@@ -373,7 +407,9 @@ export function summarizeDailyAgenda(input: {
     lines.push("- Estimated from visible calendar events. Reconnect Google Calendar to enable FreeBusy.");
   }
   if (freeBlocks.length === 0) {
-    lines.push("- No open blocks of 30 minutes or more between 09:00 and 18:00.");
+    lines.push(
+      `- No open blocks of 30 minutes or more between ${workingHours.workingHoursStart} and ${workingHours.workingHoursEnd}.`
+    );
   } else {
     for (const block of freeBlocks) {
       lines.push(
@@ -423,6 +459,7 @@ export async function buildDailyAgenda(
     date: input.date,
     referenceDate: input.now
   });
+  const calendarPreferences = await resolveCalendarPreferences(db, userId);
   const events = await listCalendarEvents(db, env, userId, {
     timeMin: window.start.toISOString(),
     timeMax: window.end.toISOString(),
@@ -450,6 +487,7 @@ export async function buildDailyAgenda(
     events,
     busy,
     freeBusyEstimated,
+    workingHours: calendarPreferences,
     now: input.now
   });
 }

@@ -15,6 +15,12 @@ import {
   createCalendarUpdateDraft
 } from "../calendar/updates.js";
 
+const silentLogger = {
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn()
+};
+
 describe("calendar event drafts", () => {
   it("draft_calendar_event stores a pending draft without calling Google Calendar", async () => {
     const create = vi.fn(async ({ data }) => ({ id: "draft_1", ...data }));
@@ -38,6 +44,7 @@ describe("calendar event drafts", () => {
   it("confirmCalendarEventDraftWithClient only confirms existing pending drafts", async () => {
     const db = {
       calendarEventDraft: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
         findFirst: vi.fn(async () => null),
         update: vi.fn()
       }
@@ -49,10 +56,77 @@ describe("calendar event drafts", () => {
     } as any;
 
     await expect(
-      confirmCalendarEventDraftWithClient(db, calendar, "user_1", "missing_draft")
+      confirmCalendarEventDraftWithClient(db, calendar, "user_1", "missing_draft", silentLogger)
     ).rejects.toThrow("Pending calendar event draft was not found");
     expect(calendar.events.insert).not.toHaveBeenCalled();
     expect(db.calendarEventDraft.update).not.toHaveBeenCalled();
+  });
+
+  it("confirmCalendarEventDraftWithClient is idempotent after a draft is confirmed", async () => {
+    let storedDraft = {
+      id: "draft_1",
+      userId: "user_1",
+      status: DRAFT_STATUS.Pending,
+      title: "Gym",
+      startTime: new Date("2026-06-02T14:00:00.000Z"),
+      endTime: new Date("2026-06-02T15:00:00.000Z"),
+      timezone: "Asia/Almaty",
+      description: null,
+      location: null,
+      recurrenceRule: null,
+      googleEventId: null
+    };
+    const db = {
+      calendarEventDraft: {
+        updateMany: vi.fn(async ({ where, data }) => {
+          if (storedDraft.id === where.id && storedDraft.status === where.status) {
+            storedDraft = { ...storedDraft, ...data };
+            return { count: 1 };
+          }
+          return { count: 0 };
+        }),
+        findFirst: vi.fn(async ({ where }) => {
+          if (where.status && storedDraft.status !== where.status) return null;
+          return storedDraft;
+        }),
+        update: vi.fn(async ({ data }) => {
+          storedDraft = { ...storedDraft, ...data };
+          return storedDraft;
+        })
+      }
+    } as any;
+    const calendar = {
+      events: {
+        insert: vi.fn(async () => ({ data: { id: "google_event_1", summary: "Gym" } }))
+      }
+    } as any;
+
+    const first = await confirmCalendarEventDraftWithClient(
+      db,
+      calendar,
+      "user_1",
+      "draft_1",
+      silentLogger
+    );
+    const second = await confirmCalendarEventDraftWithClient(
+      db,
+      calendar,
+      "user_1",
+      "draft_1",
+      silentLogger
+    );
+
+    expect(calendar.events.insert).toHaveBeenCalledOnce();
+    expect(calendar.events.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestBody: expect.objectContaining({
+          extendedProperties: { private: { assistantDraftId: "draft_1" } }
+        })
+      })
+    );
+    expect(first.alreadyProcessed).toBe(false);
+    expect(second.alreadyProcessed).toBe(true);
+    expect(second.event.id).toBe("google_event_1");
   });
 });
 
@@ -78,6 +152,7 @@ describe("calendar cancellation drafts", () => {
   it("confirmCalendarCancellationDraftWithClient only deletes existing pending drafts", async () => {
     const db = {
       calendarEventCancellationDraft: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
         findFirst: vi.fn(async () => null),
         update: vi.fn()
       }
@@ -89,10 +164,67 @@ describe("calendar cancellation drafts", () => {
     } as any;
 
     await expect(
-      confirmCalendarCancellationDraftWithClient(db, calendar, "user_1", "missing_draft")
+      confirmCalendarCancellationDraftWithClient(
+        db,
+        calendar,
+        "user_1",
+        "missing_draft",
+        silentLogger
+      )
     ).rejects.toThrow("Pending calendar cancellation draft was not found");
     expect(calendar.events.delete).not.toHaveBeenCalled();
     expect(db.calendarEventCancellationDraft.update).not.toHaveBeenCalled();
+  });
+
+  it("confirmCalendarCancellationDraftWithClient does not delete twice", async () => {
+    let storedDraft = {
+      id: "cancel_draft_1",
+      userId: "user_1",
+      status: CANCELLATION_STATUS.Pending,
+      googleEventId: "google_event_1",
+      title: "Gym",
+      startTime: null,
+      endTime: null,
+      timezone: "Asia/Almaty"
+    };
+    const db = {
+      calendarEventCancellationDraft: {
+        updateMany: vi.fn(async ({ where, data }) => {
+          if (storedDraft.id === where.id && storedDraft.status === where.status) {
+            storedDraft = { ...storedDraft, ...data };
+            return { count: 1 };
+          }
+          return { count: 0 };
+        }),
+        findFirst: vi.fn(async ({ where }) => {
+          if (where.status && storedDraft.status !== where.status) return null;
+          return storedDraft;
+        }),
+        update: vi.fn(async ({ data }) => {
+          storedDraft = { ...storedDraft, ...data };
+          return storedDraft;
+        })
+      }
+    } as any;
+    const calendar = { events: { delete: vi.fn(async () => ({})) } } as any;
+
+    await confirmCalendarCancellationDraftWithClient(
+      db,
+      calendar,
+      "user_1",
+      "cancel_draft_1",
+      silentLogger
+    );
+    const second = await confirmCalendarCancellationDraftWithClient(
+      db,
+      calendar,
+      "user_1",
+      "cancel_draft_1",
+      silentLogger
+    );
+
+    expect(calendar.events.delete).toHaveBeenCalledOnce();
+    expect(second.alreadyProcessed).toBe(true);
   });
 });
 
@@ -120,6 +252,7 @@ describe("calendar update drafts", () => {
   it("confirmCalendarUpdateDraftWithClient only patches existing pending drafts", async () => {
     const db = {
       calendarEventUpdateDraft: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
         findFirst: vi.fn(async () => null),
         update: vi.fn()
       }
@@ -131,10 +264,67 @@ describe("calendar update drafts", () => {
     } as any;
 
     await expect(
-      confirmCalendarUpdateDraftWithClient(db, calendar, "user_1", "missing_draft")
+      confirmCalendarUpdateDraftWithClient(db, calendar, "user_1", "missing_draft", silentLogger)
     ).rejects.toThrow("Pending calendar update draft was not found");
     expect(calendar.events.patch).not.toHaveBeenCalled();
     expect(db.calendarEventUpdateDraft.update).not.toHaveBeenCalled();
+  });
+
+  it("confirmCalendarUpdateDraftWithClient does not patch twice", async () => {
+    let storedDraft = {
+      id: "update_draft_1",
+      userId: "user_1",
+      status: UPDATE_STATUS.Pending,
+      googleEventId: "google_event_1",
+      currentTitle: "Gym",
+      newTitle: "Training",
+      newStartTime: null,
+      newEndTime: null,
+      timezone: "Asia/Almaty",
+      newDescription: null,
+      newLocation: null,
+      newRecurrenceRule: null
+    };
+    const db = {
+      calendarEventUpdateDraft: {
+        updateMany: vi.fn(async ({ where, data }) => {
+          if (storedDraft.id === where.id && storedDraft.status === where.status) {
+            storedDraft = { ...storedDraft, ...data };
+            return { count: 1 };
+          }
+          return { count: 0 };
+        }),
+        findFirst: vi.fn(async ({ where }) => {
+          if (where.status && storedDraft.status !== where.status) return null;
+          return storedDraft;
+        }),
+        update: vi.fn(async ({ data }) => {
+          storedDraft = { ...storedDraft, ...data };
+          return storedDraft;
+        })
+      }
+    } as any;
+    const calendar = {
+      events: { patch: vi.fn(async () => ({ data: { id: "google_event_1", summary: "Training" } })) }
+    } as any;
+
+    await confirmCalendarUpdateDraftWithClient(
+      db,
+      calendar,
+      "user_1",
+      "update_draft_1",
+      silentLogger
+    );
+    const second = await confirmCalendarUpdateDraftWithClient(
+      db,
+      calendar,
+      "user_1",
+      "update_draft_1",
+      silentLogger
+    );
+
+    expect(calendar.events.patch).toHaveBeenCalledOnce();
+    expect(second.alreadyProcessed).toBe(true);
   });
 
   it("rejects time update drafts missing an end time", async () => {

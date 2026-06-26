@@ -48,6 +48,16 @@ describe("calendar tool schemas", () => {
     expect(input.max_slots).toBe(5);
   });
 
+  it("allows suggest_time_slots to omit duration for saved defaults", () => {
+    const input = suggestTimeSlotsSchema.parse({
+      time_min: "2026-06-05T09:00:00+05:00",
+      time_max: "2026-06-05T18:00:00+05:00",
+      timezone: "Asia/Almaty"
+    });
+
+    expect(input.duration_minutes).toBeUndefined();
+  });
+
   it("validates draft_calendar_event input", () => {
     const input = draftCalendarEventSchema.parse({
       title: "Gym",
@@ -85,6 +95,38 @@ describe("calendar tool schemas", () => {
         recurrence_rule: "weekly"
       })
     ).toThrow();
+
+    expect(() =>
+      draftCalendarEventSchema.parse({
+        title: "Gym",
+        start_time: "2026-06-02T19:00:00+05:00",
+        end_time: "2026-06-02T20:00:00+05:00",
+        timezone: "Asia/Almaty",
+        recurrence_rule: "RRULE:FREQ=NOPE"
+      })
+    ).toThrow();
+  });
+
+  it("requires current times when only changing recurrence", () => {
+    expect(() =>
+      draftUpdateCalendarEventSchema.parse({
+        event_id: "google_event_1",
+        current_title: "Gym",
+        timezone: "Asia/Almaty",
+        new_recurrence_rule: "RRULE:FREQ=WEEKLY;COUNT=4"
+      })
+    ).toThrow();
+
+    expect(
+      draftUpdateCalendarEventSchema.parse({
+        event_id: "google_event_1",
+        current_title: "Gym",
+        current_start_time: "2026-06-02T19:00:00+05:00",
+        current_end_time: "2026-06-02T20:00:00+05:00",
+        timezone: "Asia/Almaty",
+        new_recurrence_rule: "RRULE:FREQ=WEEKLY;COUNT=4"
+      }).current_start_time
+    ).toBe("2026-06-02T19:00:00+05:00");
   });
 
   it("rejects update drafts without changes", () => {

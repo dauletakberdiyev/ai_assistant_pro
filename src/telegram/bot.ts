@@ -2,6 +2,7 @@ import { Bot, InlineKeyboard } from "grammy";
 import type { Context } from "grammy";
 import type { PrismaClient, SalahCityChoice } from "@prisma/client";
 import type { Env } from "../config/env.js";
+import { consoleStructuredLogger, type StructuredLogger } from "../logger.js";
 import { buildDailyAgenda } from "../calendar/agenda.js";
 import {
   cancelCalendarCancellationDraft,
@@ -118,7 +119,11 @@ function parseSalahCityName(text: string | undefined): string {
   return cityName;
 }
 
-export function createBot(db: PrismaClient, env: Env) {
+export function createBot(
+  db: PrismaClient,
+  env: Env,
+  logger: StructuredLogger = consoleStructuredLogger
+) {
   const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
 
   bot.command("start", async (ctx) => {
@@ -391,10 +396,19 @@ export function createBot(db: PrismaClient, env: Env) {
 
       if (kind === "draft") {
         if (action === "confirm") {
-          const { event } = await confirmCalendarEventDraft(db, env, user.id, draftId);
-          await ctx.answerCallbackQuery({ text: "Calendar event created" });
+          const result = await confirmCalendarEventDraft(db, env, user.id, draftId, logger);
+          const { event } = result;
+          if (result.alreadyProcessing) {
+            await ctx.answerCallbackQuery({ text: "Calendar event is already being created" });
+            return;
+          }
+          await ctx.answerCallbackQuery({
+            text: result.alreadyProcessed ? "Calendar event was already created" : "Calendar event created"
+          });
           await ctx.editMessageText(
-            `Created: ${event.summary ?? "calendar event"}\nEvent ID: ${event.id ?? "unknown"}`
+            `${result.alreadyProcessed ? "Already created" : "Created"}: ${
+              event.summary ?? "calendar event"
+            }\nEvent ID: ${event.id ?? "unknown"}`
           );
           return;
         }
@@ -407,10 +421,19 @@ export function createBot(db: PrismaClient, env: Env) {
 
       if (kind === "upd") {
         if (action === "confirm") {
-          const { event } = await confirmCalendarUpdateDraft(db, env, user.id, draftId);
-          await ctx.answerCallbackQuery({ text: "Calendar event updated" });
+          const result = await confirmCalendarUpdateDraft(db, env, user.id, draftId, logger);
+          const { event } = result;
+          if (result.alreadyProcessing) {
+            await ctx.answerCallbackQuery({ text: "Calendar event is already being updated" });
+            return;
+          }
+          await ctx.answerCallbackQuery({
+            text: result.alreadyProcessed ? "Calendar event was already updated" : "Calendar event updated"
+          });
           await ctx.editMessageText(
-            `Updated: ${event.summary ?? "calendar event"}\nEvent ID: ${event.id ?? "unknown"}`
+            `${result.alreadyProcessed ? "Already updated" : "Updated"}: ${
+              event.summary ?? "calendar event"
+            }\nEvent ID: ${event.id ?? "unknown"}`
           );
           return;
         }
@@ -422,9 +445,17 @@ export function createBot(db: PrismaClient, env: Env) {
       }
 
       if (action === "confirm") {
-        await confirmCalendarCancellationDraft(db, env, user.id, draftId);
-        await ctx.answerCallbackQuery({ text: "Calendar event deleted" });
-        await ctx.editMessageText("Deleted calendar event.");
+        const result = await confirmCalendarCancellationDraft(db, env, user.id, draftId, logger);
+        if (result.alreadyProcessing) {
+          await ctx.answerCallbackQuery({ text: "Calendar event is already being deleted" });
+          return;
+        }
+        await ctx.answerCallbackQuery({
+          text: result.alreadyProcessed ? "Calendar event was already deleted" : "Calendar event deleted"
+        });
+        await ctx.editMessageText(
+          result.alreadyProcessed ? "Already deleted calendar event." : "Deleted calendar event."
+        );
         return;
       }
 
@@ -459,7 +490,7 @@ export function createBot(db: PrismaClient, env: Env) {
         }
       });
 
-      const result = await runAssistant(db, env, user.id, text);
+      const result = await runAssistant(db, env, user.id, text, logger);
 
       await db.message.create({
         data: {

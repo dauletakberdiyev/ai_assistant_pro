@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isValidRecurrenceRule } from "../calendar/recurrence.js";
 import { PREFERENCE_KEYS } from "../memory/preferences.js";
 
 const isoDateTime = z.string().datetime({ offset: true });
@@ -6,7 +7,7 @@ const recurrenceRule = z
   .string()
   .trim()
   .max(500)
-  .regex(/^RRULE:/i, "Use an RFC 5545 RRULE string starting with RRULE:");
+  .refine(isValidRecurrenceRule, "Use a valid RFC 5545 RRULE string starting with RRULE:");
 const preferenceKey = z.enum(PREFERENCE_KEYS);
 
 export const listCalendarEventsSchema = z.object({
@@ -23,7 +24,7 @@ export const getFreeBusySchema = z.object({
 export const suggestTimeSlotsSchema = z.object({
   time_min: isoDateTime,
   time_max: isoDateTime,
-  duration_minutes: z.number().int().min(15).max(480),
+  duration_minutes: z.number().int().min(15).max(480).optional(),
   timezone: z.string().min(1),
   max_slots: z.number().int().min(1).max(10).default(5)
 });
@@ -80,6 +81,8 @@ export const draftUpdateCalendarEventSchema = z
   .object({
     event_id: z.string().min(1),
     current_title: z.string().min(1).max(200),
+    current_start_time: isoDateTime.optional(),
+    current_end_time: isoDateTime.optional(),
     new_title: z.string().min(1).max(200).optional(),
     new_start_time: isoDateTime.optional(),
     new_end_time: isoDateTime.optional(),
@@ -100,6 +103,19 @@ export const draftUpdateCalendarEventSchema = z
   )
   .refine((input) => Boolean(input.new_start_time) === Boolean(input.new_end_time), {
     message: "Calendar event time updates require both new_start_time and new_end_time"
+  })
+  .refine(
+    (input) =>
+      !input.new_recurrence_rule ||
+      Boolean(input.new_start_time && input.new_end_time) ||
+      Boolean(input.current_start_time && input.current_end_time),
+    {
+      message:
+        "Recurrence updates require either new_start_time/new_end_time or current_start_time/current_end_time"
+    }
+  )
+  .refine((input) => Boolean(input.current_start_time) === Boolean(input.current_end_time), {
+    message: "Current calendar event times require both current_start_time and current_end_time"
   });
 
 export const assistantTools = [
@@ -175,7 +191,8 @@ export const assistantTools = [
           type: "integer",
           minimum: 15,
           maximum: 480,
-          description: "Length of the task or meeting to schedule."
+          description:
+            "Length of the task or meeting to schedule. Omit only when the user has a saved default meeting duration."
         },
         timezone: { type: "string", description: "IANA timezone, e.g. Asia/Almaty." },
         max_slots: {
@@ -185,7 +202,7 @@ export const assistantTools = [
           default: 5
         }
       },
-      required: ["time_min", "time_max", "duration_minutes", "timezone"]
+      required: ["time_min", "time_max", "timezone"]
     }
   },
   {
@@ -240,6 +257,14 @@ export const assistantTools = [
       properties: {
         event_id: { type: "string", description: "Google Calendar event id from list_calendar_events." },
         current_title: { type: "string", description: "Current event title for the confirmation message." },
+        current_start_time: {
+          type: "string",
+          description: "Current event start time from list_calendar_events, required when changing recurrence without changing time."
+        },
+        current_end_time: {
+          type: "string",
+          description: "Current event end time from list_calendar_events, required when changing recurrence without changing time."
+        },
         new_title: { type: "string" },
         new_start_time: { type: "string", description: "ISO 8601 date-time with timezone offset." },
         new_end_time: { type: "string", description: "ISO 8601 date-time with timezone offset." },

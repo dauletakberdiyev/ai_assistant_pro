@@ -12,8 +12,17 @@ export function createServer(db: PrismaClient, env: Env, bot: Bot) {
     origin: false
   });
 
-  app.get("/health", async () => {
-    return { ok: true };
+  app.get("/health", async (request, reply) => {
+    try {
+      await db.$queryRaw`SELECT 1`;
+      return { ok: true, database: "ok" };
+    } catch (error) {
+      request.log.error(
+        { error: error instanceof Error ? error.message : String(error) },
+        "health check database ping failed"
+      );
+      return reply.code(503).send({ ok: false, database: "error" });
+    }
   });
 
   app.get("/auth/google/start", async (_request, reply) => {

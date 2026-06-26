@@ -40,6 +40,25 @@ describe("daily agenda intelligence", () => {
     expect(agenda.text).toContain("Next up:");
   });
 
+  it("uses saved working hours when summarizing free blocks", () => {
+    const agenda = summarizeDailyAgenda({
+      date: "2026-06-05",
+      timezone: "Asia/Almaty",
+      timeMin: new Date("2026-06-04T19:00:00.000Z"),
+      timeMax: new Date("2026-06-05T19:00:00.000Z"),
+      now: new Date("2026-06-05T02:00:00.000Z"),
+      events: [],
+      busy: [],
+      workingHours: {
+        workingHoursStart: "10:00",
+        workingHoursEnd: "16:00"
+      }
+    });
+
+    expect(agenda.text).toContain("10:00-16:00 (6h)");
+    expect(agenda.free_block_count).toBe(1);
+  });
+
   it("only sends one opt-in daily agenda per local day", () => {
     const user = {
       dailyAgendaEnabled: true,

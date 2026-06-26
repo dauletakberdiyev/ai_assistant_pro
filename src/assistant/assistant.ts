@@ -10,6 +10,7 @@ import { assistantTools, type AssistantToolName } from "./toolSchemas.js";
 import { executeAssistantTool } from "./tools.js";
 import { createOpenAIResponse } from "./openaiResponses.js";
 import { formatPreferencesForAssistant } from "../memory/preferences.js";
+import { consoleStructuredLogger, errorContext, type StructuredLogger } from "../logger.js";
 
 const MAX_TOOL_ROUNDS = 5;
 
@@ -57,7 +58,7 @@ function buildInstructions(timezone: string, preferenceSummary: string): string 
     "If salah city setup returns not_found, ask the user to type the city name correctly in Kazakh/Cyrillic.",
     "Use calendar tools when the answer depends on the user's real calendar.",
     "Use get_daily_agenda when the user asks for today, agenda, daily plan, free blocks, or schedule conflicts for a day.",
-    "Use suggest_time_slots when the user asks when they can fit a task or meeting, or provides a duration without a specific start time.",
+    "Use suggest_time_slots when the user asks when they can fit a task or meeting, or provides a duration without a specific start time. If the user gave no duration, omit duration_minutes so saved default meeting duration can be used.",
     "Never claim that a calendar event has been created after draft_calendar_event.",
     "Never claim that a calendar event has been deleted after draft_cancel_calendar_event.",
     "Never claim that a calendar event has been updated after draft_update_calendar_event.",
@@ -68,7 +69,7 @@ function buildInstructions(timezone: string, preferenceSummary: string): string 
     "Only tell the user to press Confirm after draft_calendar_event, draft_cancel_calendar_event, or draft_update_calendar_event returned ok: true.",
     "If a draft tool returns ok: false, explain the specific blocker and do not mention a Confirm button.",
     "When the user asks to cancel or delete an event, find the matching event with list_calendar_events, then draft the cancellation if there is one clear match. Ask a clarifying question if multiple events match.",
-    "When the user asks to update or reschedule an event, find the matching event with list_calendar_events, then draft the update if there is one clear match. Ask a clarifying question if multiple events match.",
+    "When the user asks to update or reschedule an event, find the matching event with list_calendar_events, then draft the update if there is one clear match. Include current_start_time and current_end_time from the matched event when changing recurrence without changing time. Ask a clarifying question if multiple events match.",
     "Before drafting a new event for a specific time, check for conflicts. If the draft tool reports a conflict, suggest alternatives instead of drafting.",
     "Ask a clarifying question before using calendar write tools when the requested date, time, duration, timezone, event identity, or recurrence pattern is ambiguous.",
     "For recurring events, use RFC 5545 RRULE strings such as RRULE:FREQ=WEEKLY;COUNT=10. Do not guess an end condition if the user did not provide one; ask whether it should repeat forever, until a date, or for a number of occurrences.",
@@ -149,7 +150,8 @@ export async function runAssistant(
   db: PrismaClient,
   env: Env,
   userId: string,
-  userText: string
+  userText: string,
+  logger: StructuredLogger = consoleStructuredLogger
 ): Promise<AssistantResult> {
   const user = await db.user.findUniqueOrThrow({ where: { id: userId } });
   const preferences = await db.userPreference.findMany({
@@ -160,6 +162,7 @@ export async function runAssistant(
   const run = await db.assistantRun.create({
     data: { userId, status: "running", input: userText }
   });
+  logger.info({ userId, assistantRunId: run.id }, "assistant run started");
 
   const pendingDrafts: CalendarEventDraft[] = [];
   const pendingCancellationDrafts: CalendarEventCancellationDraft[] = [];
@@ -200,6 +203,16 @@ export async function runAssistant(
           where: { id: run.id },
           data: { status: "completed", output: finalText }
         });
+        logger.info(
+          {
+            userId,
+            assistantRunId: run.id,
+            pendingDrafts: pendingDrafts.length,
+            pendingCancellationDrafts: pendingCancellationDrafts.length,
+            pendingUpdateDrafts: pendingUpdateDrafts.length
+          },
+          "assistant run completed"
+        );
         return { text: finalText, pendingDrafts, pendingCancellationDrafts, pendingUpdateDrafts };
       }
 
@@ -213,7 +226,8 @@ export async function runAssistant(
           assistantRunId: run.id,
           pendingDrafts,
           pendingCancellationDrafts,
-          pendingUpdateDrafts
+          pendingUpdateDrafts,
+          logger
         });
 
         input.push({
@@ -229,6 +243,7 @@ export async function runAssistant(
       where: { id: run.id },
       data: { status: "failed", output: finalText, error: "Tool-call limit reached" }
     });
+    logger.warn({ userId, assistantRunId: run.id }, "assistant run reached tool-call limit");
     return { text: finalText, pendingDrafts, pendingCancellationDrafts, pendingUpdateDrafts };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown assistant error";
@@ -236,6 +251,14 @@ export async function runAssistant(
       where: { id: run.id },
       data: { status: "failed", error: message }
     });
+    logger.error(
+      {
+        userId,
+        assistantRunId: run.id,
+        ...errorContext(error)
+      },
+      "assistant run failed"
+    );
     throw error;
   }
 }
