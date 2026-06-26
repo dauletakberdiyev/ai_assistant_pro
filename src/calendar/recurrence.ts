@@ -1,6 +1,8 @@
-import { rrulestr } from "rrule";
+import rrulePackage from "rrule";
 import type { AgendaBusyBlock } from "./agenda.js";
 import { findCalendarConflicts } from "./intelligence.js";
+
+const { rrulestr } = rrulePackage;
 
 export const RECURRENCE_CHECK_MONTHS = 6;
 export const RECURRENCE_CHECK_MAX_OCCURRENCES = 50;
