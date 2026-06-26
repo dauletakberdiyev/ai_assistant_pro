@@ -12,10 +12,6 @@ export function createServer(db: PrismaClient, env: Env, bot: Bot) {
     origin: false
   });
 
-  app.get("/health", async () => {
-    return { ok: true };
-  });
-
   app.get("/ready", async (request, reply) => {
     try {
       await db.$queryRaw`SELECT 1`;
